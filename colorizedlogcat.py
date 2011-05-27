@@ -1,0 +1,225 @@
+#!/usr/bin/python
+
+'''
+    Copyright 2009, The Android Open Source Project
+
+    Licensed under the Apache License, Version 2.0 (the "License"); 
+    you may not use this file except in compliance with the License. 
+    You may obtain a copy of the License at 
+
+        http://www.apache.org/licenses/LICENSE-2.0 
+
+    Unless required by applicable law or agreed to in writing, software 
+    distributed under the License is distributed on an "AS IS" BASIS, 
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. 
+    See the License for the specific language governing permissions and 
+    limitations under the License.
+'''
+
+# script to highlight adb logcat output for console
+# written by jeff sharkey, http://jsharkey.org/
+# piping detection and popen() added by other android team members
+# 
+# Forked & modified: jweaver; http://jackweaver.net; added:
+# 
+# - showUsage()
+# - options for accepting arguments.  Using argparse (req 2.7 or >).
+# - dateStamp() 
+# - line number printout.  (allows for easy reference of output lines to others).
+# 
+# TODO:  Add argument to toggle line numbers on/off.  This is all in a plan to
+# better support monitors with smaller resolutions that can't stretch wide to 
+# fit all the buffer write on a single line.
+
+
+
+import os, sys, re, StringIO
+import fcntl, termios, struct
+import argparse
+import datetime
+
+# unpack the current terminal width/height
+data = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '1234')
+HEIGHT, WIDTH = struct.unpack('hh',data)
+
+BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+
+def format(fg=None, bg=None, bright=False, bold=False, dim=False, reset=False):
+    # manually derived from http://en.wikipedia.org/wiki/ANSI_escape_code#Codes
+    codes = []
+    if reset: codes.append("0")
+    else:
+        if not fg is None: codes.append("3%d" % (fg))
+        if not bg is None:
+            if not bright: codes.append("4%d" % (bg))
+            else: codes.append("10%d" % (bg))
+        if bold: codes.append("1")
+        elif dim: codes.append("2")
+        else: codes.append("22")
+    return "\033[%sm" % (";".join(codes))
+
+
+def indent_wrap(message, indent=0, width=80):
+    wrap_area = width - indent
+    messagebuf = StringIO.StringIO()
+    current = 0
+    while current < len(message):
+        next = min(current + wrap_area, len(message))
+        messagebuf.write(message[current:next])
+        if next < len(message):
+            messagebuf.write("\n%s" % (" " * indent))
+        current = next
+    return messagebuf.getvalue()
+
+
+LAST_USED = [RED,GREEN,YELLOW,BLUE,MAGENTA,CYAN,WHITE]
+KNOWN_TAGS = {
+    "dalvikvm": BLUE,
+    "Process": BLUE,
+    "ActivityManager": CYAN,
+    "ActivityThread": CYAN,
+}
+
+def displayUsage():
+    print "Usage: colorizedlogcat [-d|-e] [-t]"
+    print "       adb [-d|-e] logcat | colorizedlogcat"
+    sys.exit(1)
+
+
+
+def allocate_color(tag):
+    # this will allocate a unique format for the given tag
+    # since we dont have very many colors, we always keep track of the LRU
+    if not tag in KNOWN_TAGS:
+        KNOWN_TAGS[tag] = LAST_USED[0]
+    color = KNOWN_TAGS[tag]
+    LAST_USED.remove(color)
+    LAST_USED.append(color)
+    return color
+
+
+RULES = {
+    #re.compile(r"([\w\.@]+)=([\w\.@]+)"): r"%s\1%s=%s\2%s" % (format(fg=BLUE), format(fg=GREEN), format(fg=BLUE), format(reset=True)),
+}
+
+LINE_NUMBER_WIDTH = 8 #4
+lineNumber = 1
+timeStamp = False
+TAGTYPE_WIDTH = 3
+TAG_WIDTH = 20
+PROCESS_WIDTH = 8 # 8 or -1
+HEADER_SIZE = TAGTYPE_WIDTH + 1 + TAG_WIDTH + 1 + PROCESS_WIDTH + 1 + LINE_NUMBER_WIDTH
+
+TAGTYPES = {
+    "V": "%s%s%s " % (format(fg=WHITE, bg=BLACK), "V".center(TAGTYPE_WIDTH), format(reset=True)),
+    "D": "%s%s%s " % (format(fg=BLACK, bg=BLUE), "D".center(TAGTYPE_WIDTH), format(reset=True)),
+    "I": "%s%s%s " % (format(fg=BLACK, bg=GREEN), "I".center(TAGTYPE_WIDTH), format(reset=True)),
+    "W": "%s%s%s " % (format(fg=BLACK, bg=YELLOW), "W".center(TAGTYPE_WIDTH), format(reset=True)),
+    "E": "%s%s%s " % (format(fg=BLACK, bg=RED), "E".center(TAGTYPE_WIDTH), format(reset=True)),
+}
+
+# Regex's for the lines in log
+retag = re.compile("^([A-Z])/([^\(]+)\(([^\)]+)\): (.*)$")
+#reg ex stolen from stackoverflow; this could use some cleaning up
+retagWithStamp = re.compile("^[a-zA-Z0-9'!#$%&'*+/=?^_`{|}~.-]*$")
+
+adbArgs = ""
+# handle -d and -e options
+def handle_adb_arguments(args):
+    adbArgs = "none"
+    if('-d' in args and '-e' in args):
+        print "Error:  Can't specify both -e and -d as arguments, see adb help."
+        displayUsage()
+    if('-d' in args):
+        adbArgs = "-d"
+    if('-e' in args):
+        adbArgs = "-e"
+    return adbArgs
+
+
+# Set up the argument parser
+parser = argparse.ArgumentParser(description='This is a version of the coloredLogcat script written to colorize logcat output for Android development.', epilog='Report any bugs or issues to the project at https://github.com/jweaver', prog="colorizedlogcat")
+
+parser.add_argument('-t', action='store_true', default=False, dest='timestamp_switch', help='Flag that when specified turns on the use of timestamps in the 2nd column of output.')
+
+parser.add_argument('--version', action='version', version='%(prog)s 0.1')
+
+
+# Get the args and flip some switches!
+results = parser.parse_args()
+timeStamp = results.timestamp_switch
+
+
+# to pick up -d or -e
+adb_args = ' '.join(sys.argv[1:])
+
+# if someone is piping in to us, use stdin as input.  if not, invoke adb logcat
+# be careful of colorizedlogcat specific args
+if os.isatty(sys.stdin.fileno()):
+    arguments = handle_adb_arguments(adb_args)
+    if timeStamp and arguments is "none":
+        print("TIME SPECIFIED")
+        command = "adb logcat"
+    elif timeStamp and arguments != "none":
+        command = "adb %s logcat" % (adb_args)
+    else:
+        command = "adb %s logcat" % adb_args
+    input = os.popen(command)
+    
+#    input = os.popen("adb %s logcat" % adb_args)
+else:
+    input = sys.stdin
+
+
+
+# Write out columns...
+while True:
+    try:
+        line = input.readline()
+    except KeyboardInterrupt:
+        break
+
+    match = retag.match(line)
+    if not match is None:
+        tagtype, tag, owner, message = match.groups()
+        linebuf = StringIO.StringIO()
+
+        # Write out line numbers
+        linebuf.write(str(lineNumber).ljust(LINE_NUMBER_WIDTH))
+        lineNumber = lineNumber + 1
+
+        # Write a timestamp if the user specified it
+        if timeStamp:
+            currentTime = datetime.datetime.now()
+            output = '{:%Y-%m-%d %H:%M:%S}'.format(currentTime) + "    "
+            linebuf.write(output)
+
+        # center process info
+        if PROCESS_WIDTH > 0:
+            owner = owner.strip().center(PROCESS_WIDTH)
+            linebuf.write("%s%s%s " % (format(fg=BLACK, bg=BLACK, bright=True), owner, format(reset=True)))
+
+        # right-align tag title and allocate color if needed
+        tag = tag.strip()
+        color = allocate_color(tag)
+        tag = tag[-TAG_WIDTH:].rjust(TAG_WIDTH)
+        linebuf.write("%s%s %s" % (format(fg=color, dim=False), tag, format(reset=True)))
+
+        # write out tagtype colored edge
+        if not tagtype in TAGTYPES: break
+        linebuf.write(TAGTYPES[tagtype])
+
+        # insert line wrapping as needed
+        message = indent_wrap(message, HEADER_SIZE, WIDTH)
+
+        # format tag message using rules
+        for matcher in RULES:
+            replace = RULES[matcher]
+            message = matcher.sub(replace, message)
+
+        linebuf.write(message)
+        line = linebuf.getvalue()
+
+    print line
+    if len(line) == 0: break
+

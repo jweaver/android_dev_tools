@@ -1,0 +1,11 @@
+Android Tools
+
+
+
+1. colorizedlogcat.py
+	- Python script meant to colorize output on the terminal from logcat.  This was originally forked, but since then the following has been added:
+	  1. -t argument to introduce a timstamp in the 2nd column.
+	  2. line numbering
+	- Todo:
+	  1. Next an argument needs to be specified to turn the line numbering on/off.  This is in an attempt to better support monitors with smaller resolutions and can't fit the buffer on one line.
+	  2. Fix this readme to be better presented @ github.
