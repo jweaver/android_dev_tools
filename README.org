@@ -1,8 +1,10 @@
 * Android Developer Tools
 A package of simple developer tools, some addons to existing tools already out there, but likely extended for additional functionality.
 
+I'm looking for ideas on other tools which can be added or created for this suite.
+
 1. *colorizedlogcat.py*
-  - Python script meant to colorize output on the terminal from logcat.  This was originally forked, but since then the following has been added:
+- Python script meant to colorize output on the terminal from logcat.  This was originally forked, but since then the following has been added:
     1. -t argument to introduce a timstamp in the 2nd column.
     2. line numbering
     3. Usage print-out
