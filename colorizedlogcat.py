@@ -158,10 +158,7 @@ adb_args = ' '.join(sys.argv[1:])
 if os.isatty(sys.stdin.fileno()):
     arguments = handle_adb_arguments(adb_args)
     if timeStamp and arguments is "none":
-        print("TIME SPECIFIED")
         command = "adb logcat"
-    elif timeStamp and arguments != "none":
-        command = "adb %s logcat" % (adb_args)
     else:
         command = "adb %s logcat" % adb_args
     input = os.popen(command)
@@ -191,7 +188,7 @@ while True:
         # Write a timestamp if the user specified it
         if timeStamp:
             currentTime = datetime.datetime.now()
-            output = '{:%Y-%m-%d %H:%M:%S}'.format(currentTime) + "    "
+            output = '{:%H:%M:%S}'.format(currentTime) + "    "
             linebuf.write(output)
 
         # center process info
